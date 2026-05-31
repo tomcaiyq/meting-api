@@ -1,37 +1,38 @@
-import { readFile, watch } from 'node:fs/promises'
-import { resolve } from 'node:path'
-import { URL } from 'node:url'
 import config from '../config.js'
 
 // Cookie 缓存
 const cookieCache = new Map()
 const COOKIE_TTL = 1000 * 60 * 5 // 5分钟缓存过期
 
-// 启动文件监听
-const cookieDir = resolve(process.cwd(), 'cookie')
+// 仅在 Node.js/Bun 环境下启动文件监听
 let watcher = null
-
-async function startWatcher () {
+if (typeof process !== 'undefined') {
   try {
-    watcher = watch(cookieDir)
-    for await (const event of watcher) {
-      if (event.filename) {
-        // 文件变化时清除对应缓存
-        cookieCache.delete(event.filename)
+    const { watch } = await import('node:fs/promises')
+    const { resolve } = await import('node:path')
+    const cookieDir = resolve(process.cwd(), 'cookie')
+
+    async function startWatcher () {
+      try {
+        watcher = watch(cookieDir)
+        for await (const event of watcher) {
+          if (event.filename) {
+            cookieCache.delete(event.filename)
+          }
+        }
+      } catch {
+        // 监听失败不影响正常运行
       }
     }
+
+    startWatcher().catch(() => {})
   } catch {
-    // 监听失败不影响正常运行
+    // 非 Node.js 环境（如 Cloudflare Workers），跳过文件监听
   }
 }
 
-// 启动监听（仅启动一次）
-if (!watcher) {
-  startWatcher().catch(() => {})
-}
-
 /**
- * 读取指定平台的 cookie 文件
+ * 读取指定平台的 cookie
  * @param {string} server - 平台名称 (netease, tencent 等)
  * @returns {Promise<string>} cookie 字符串，失败时返回空字符串
  */
@@ -46,38 +47,32 @@ export async function readCookieFile (server) {
 
   // 优先从环境变量读取
   const envKey = `METING_COOKIE_${server.toUpperCase()}`
-  const envCookie = process.env[envKey]
+  const envCookie = typeof process !== 'undefined'
+    ? process.env[envKey]
+    : undefined
   if (envCookie) {
     const value = envCookie.trim()
-    // 更新缓存
-    cookieCache.set(server, {
-      value,
-      timestamp: now
-    })
+    cookieCache.set(server, { value, timestamp: now })
     return value
   }
 
-  // 从文件读取
-  try {
-    const cookiePath = resolve(process.cwd(), 'cookie', server)
-    const cookie = await readFile(cookiePath, 'utf-8')
-    const value = cookie.trim()
-
-    // 更新缓存
-    cookieCache.set(server, {
-      value,
-      timestamp: now
-    })
-
-    return value
-  } catch {
-    // 读取失败时也缓存空字符串，避免频繁读取不存在的文件
-    cookieCache.set(server, {
-      value: '',
-      timestamp: now
-    })
-    return ''
+  // 从文件读取（仅 Node.js/Bun 环境）
+  if (typeof process !== 'undefined') {
+    try {
+      const { readFile } = await import('node:fs/promises')
+      const { resolve } = await import('node:path')
+      const cookiePath = resolve(process.cwd(), 'cookie', server)
+      const cookie = await readFile(cookiePath, 'utf-8')
+      const value = cookie.trim()
+      cookieCache.set(server, { value, timestamp: now })
+      return value
+    } catch {
+      cookieCache.set(server, { value: '', timestamp: now })
+      return ''
+    }
   }
+
+  return ''
 }
 
 /**

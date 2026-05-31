@@ -8,24 +8,36 @@ const toNumber = (value, fallback) => {
   return Number.isNaN(parsed) ? fallback : parsed
 }
 
-export default {
-  http: {
-    prefix: process.env.HTTP_PREFIX || '',
-    port: toNumber(process.env.HTTP_PORT, 80)
-  },
-  https: {
-    enabled: toBoolean(process.env.HTTPS_ENABLED),
-    port: toNumber(process.env.HTTPS_PORT, 443),
-    keyPath: process.env.SSL_KEY_PATH || '',
-    certPath: process.env.SSL_CERT_PATH || ''
-  },
-  meting: {
-    url: process.env.METING_URL || '',
-    token: process.env.METING_TOKEN || 'token',
-    cookie: {
-      allowHosts: process.env.METING_COOKIE_ALLOW_HOSTS
-        ? (process.env.METING_COOKIE_ALLOW_HOSTS).split(',').map(h => h.trim().toLowerCase())
-        : []
+function createConfig (env = {}) {
+  const get = (key, fallback) => env[key] || fallback
+  return {
+    http: {
+      prefix: get('HTTP_PREFIX', ''),
+      port: toNumber(get('HTTP_PORT'), 80)
+    },
+    https: {
+      enabled: toBoolean(get('HTTPS_ENABLED')),
+      port: toNumber(get('HTTPS_PORT'), 443),
+      keyPath: get('SSL_KEY_PATH', ''),
+      certPath: get('SSL_CERT_PATH', '')
+    },
+    meting: {
+      url: get('METING_URL', ''),
+      token: get('METING_TOKEN', 'token'),
+      cookie: {
+        allowHosts: get('METING_COOKIE_ALLOW_HOSTS', '')
+          ? get('METING_COOKIE_ALLOW_HOSTS').split(',').map(h => h.trim().toLowerCase())
+          : []
+      }
     }
   }
 }
+
+const config = createConfig(typeof process !== 'undefined' ? process.env : {})
+
+export function initConfig (env) {
+  const override = createConfig(env)
+  Object.assign(config, override)
+}
+
+export default config

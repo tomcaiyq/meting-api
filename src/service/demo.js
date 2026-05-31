@@ -1,8 +1,8 @@
 import config from '../config.js'
 
-export default async (request) => {
+export default async (c) => {
   // 1. 初始化参数
-  const url = new URL(request.url)
+  const url = new URL(c.req.url)
   const server = url.searchParams.get('server') || 'netease'
   const type = url.searchParams.get('type') || 'search'
   const id = url.searchParams.get('id') || 'hello'
@@ -25,7 +25,5 @@ export default async (request) => {
 </body>
 </html>`
 
-  return new Response(body, {
-    headers: { 'content-type': 'text/html; charset=utf-8' }
-  })
+  return c.html(body)
 }

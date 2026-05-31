@@ -1,5 +1,4 @@
 import Meting from '@meting/core'
-import { createHmac } from 'node:crypto'
 import { HTTPException } from '../utils/http-exception.js'
 import config from '../config.js'
 import { format as lyricFormat } from '../utils/lyric.js'
@@ -21,7 +20,9 @@ const METING_METHODS = {
   pic: 'pic'
 }
 
-export default async (request, ctx) => {
+export default async (c) => {
+  const request = c.req.raw
+
   // 1. 初始化参数
   const url = new URL(request.url)
   const query = Object.fromEntries(url.searchParams)
@@ -40,7 +41,7 @@ export default async (request, ctx) => {
 
   // 3. 鉴权
   if (['lrc', 'url', 'pic'].includes(type)) {
-    if (auth(server, type, id) !== token) {
+    if (await auth(server, type, id) !== token) {
       throw new HTTPException(401, { message: '鉴权失败,非法调用' })
     }
   }
@@ -49,7 +50,7 @@ export default async (request, ctx) => {
   const cacheKey = `${server}/${type}/${id}`
   let data = cache.get(cacheKey)
   if (data === undefined) {
-    ctx.responseHeaders.set('x-cache', 'miss')
+    c.header('x-cache', 'miss')
     const meting = new Meting(server)
     meting.format(true)
 
@@ -84,7 +85,7 @@ export default async (request, ctx) => {
     let url = data.url
     // 空结果返回 404
     if (!url) {
-      return new Response(null, { status: 404 })
+      return c.body(null, 404)
     }
     // 链接转换
     if (server === 'netease') {
@@ -107,35 +108,44 @@ export default async (request, ctx) => {
       url = url
         .replace('http://zhangmenshiting.qianqian.com', 'https://gss3.baidu.com/y0s1hSulBw92lNKgpU_Z2jR7b2w6buu')
     }
-    return new Response(null, { status: 302, headers: { location: url } })
+    return c.redirect(url, 302)
   }
 
   if (type === 'pic') {
     const url = data.url
     // 空结果返回 404
     if (!url) {
-      return new Response(null, { status: 404 })
+      return c.body(null, 404)
     }
-    return new Response(null, { status: 302, headers: { location: url } })
+    return c.redirect(url, 302)
   }
 
   if (type === 'lrc') {
-    return new Response(lyricFormat(data.lyric, data.tlyric || ''), {
-      headers: { 'content-type': 'text/plain; charset=utf-8' }
+    return c.text(lyricFormat(data.lyric, data.tlyric || ''), 200, {
+      'content-type': 'text/plain; charset=utf-8'
     })
   }
 
-  return Response.json(data.map(x => {
+  return c.json(await Promise.all(data.map(async x => {
     return {
       title: x.name,
       author: x.artist.join(' / '),
-      url: `${config.meting.url}/api?server=${server}&type=url&id=${x.url_id}&auth=${auth(server, 'url', x.url_id)}`,
-      pic: `${config.meting.url}/api?server=${server}&type=pic&id=${x.pic_id}&auth=${auth(server, 'pic', x.pic_id)}`,
-      lrc: `${config.meting.url}/api?server=${server}&type=lrc&id=${x.lyric_id}&auth=${auth(server, 'lrc', x.lyric_id)}`
+      url: `${config.meting.url}/api?server=${server}&type=url&id=${x.url_id}&auth=${await auth(server, 'url', x.url_id)}`,
+      pic: `${config.meting.url}/api?server=${server}&type=pic&id=${x.pic_id}&auth=${await auth(server, 'pic', x.pic_id)}`,
+      lrc: `${config.meting.url}/api?server=${server}&type=lrc&id=${x.lyric_id}&auth=${await auth(server, 'lrc', x.lyric_id)}`
     }
-  }))
+  })))
 }
 
-const auth = (server, type, id) => {
-  return createHmac('sha1', config.meting.token).update(`${server}${type}${id}`).digest('hex')
+const auth = async (server, type, id) => {
+  const data = new TextEncoder().encode(`${server}${type}${id}`)
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(config.meting.token),
+    { name: 'HMAC', hash: 'SHA-1' },
+    false,
+    ['sign']
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, data)
+  return Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('')
 }

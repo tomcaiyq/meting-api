@@ -1,79 +1,57 @@
 import pino from 'pino'
 
 const logger = pino({
-  level: process.env.LOG_LEVEL || 'debug',
-  transport: process.env.NODE_ENV !== 'production'
+  level: typeof process !== 'undefined' ? (process.env.LOG_LEVEL || 'debug') : 'debug',
+  transport: typeof process !== 'undefined' && process.env.NODE_ENV !== 'production'
     ? { target: 'pino-pretty' }
     : undefined
 })
 
 const generateRequestId = () => Math.random().toString(36).substring(7)
 
-const withRequestLogger = (handler) => {
-  return async (request) => {
-    const requestId = generateRequestId()
-    const startTime = performance.now()
-    const url = new URL(request.url)
+const requestLogger = async (c, next) => {
+  const requestId = generateRequestId()
+  const startTime = performance.now()
+  const url = new URL(c.req.url)
 
-    const reqInfo = {
-      method: request.method,
-      url: url.pathname,
-      headers: Object.fromEntries(request.headers)
-    }
-
-    const requestScopedLogger = logger.child({ req: reqInfo })
-
-    // 构建上下文对象
-    const ctx = {
-      logger: requestScopedLogger,
-      requestId,
-      responseHeaders: new Headers(),
-      error: null
-    }
-
-    // 执行实际的处理逻辑
-    let response = await handler(request, ctx)
-
-    // 将 ctx.responseHeaders 合并到 response 中
-    const mergedHeaders = new Headers(response.headers)
-    for (const [key, value] of ctx.responseHeaders) {
-      mergedHeaders.set(key, value)
-    }
-    mergedHeaders.set('x-request-id', requestId)
-
-    response = new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: mergedHeaders
-    })
-
-    // 记录响应日志
-    const responseTime = Math.round(performance.now() - startTime)
-
-    const responseHeaders = {}
-    for (const [key, value] of response.headers.entries()) {
-      responseHeaders[key] = value
-    }
-
-    const bindings = {
-      reqId: requestId,
-      res: {
-        status: response.status,
-        headers: responseHeaders
-      },
-      responseTime
-    }
-
-    const level = ctx.error ? 'error' : 'info'
-    const message = ctx.error?.message || 'Request completed'
-
-    requestScopedLogger[level](bindings, message)
-
-    return response
+  const reqInfo = {
+    method: c.req.method,
+    url: url.pathname,
+    headers: Object.fromEntries(c.req.raw.headers)
   }
+
+  const requestScopedLogger = logger.child({ req: reqInfo })
+
+  c.set('logger', requestScopedLogger)
+  c.set('requestId', requestId)
+  c.set('error', null)
+
+  await next()
+
+  const responseTime = Math.round(performance.now() - startTime)
+
+  const responseHeaders = {}
+  for (const [key, value] of c.res.headers.entries()) {
+    responseHeaders[key] = value
+  }
+
+  const bindings = {
+    reqId: requestId,
+    res: {
+      status: c.res.status,
+      headers: responseHeaders
+    },
+    responseTime
+  }
+
+  const error = c.get('error')
+  const level = error ? 'error' : 'info'
+  const message = error?.message || 'Request completed'
+
+  requestScopedLogger[level](bindings, message)
 }
 
 export {
-  withRequestLogger,
+  requestLogger,
   logger
 }
